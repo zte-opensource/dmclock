@@ -202,6 +202,7 @@ namespace crimson {
     template<typename C, typename R>
     class PriorityQueueBase {
       FRIEND_TEST(dmclock_server, client_idle_erase);
+      FRIEND_TEST(dmclock_server, client_idle_activation);
 
     public:
 
@@ -711,15 +712,15 @@ namespace crimson {
 	  // The alternative would be to maintain a proportional queue
 	  // (define USE_PROP_TAG) and do an O(1) operation here.
 
-	  // Was unable to confirm whether equality testing on
-	  // std::numeric_limits<double>::max() is guaranteed, so
-	  // we'll use a compile-time calculated trigger that is one
-	  // third the max, which should be much larger than any
-	  // expected organic value.
-	  constexpr double lowest_prop_tag_trigger =
-	    std::numeric_limits<double>::max() / 3.0;
-
-	  double lowest_prop_tag = std::numeric_limits<double>::max();
+	  // a proposal
+	  double _lowest_prop_tag = NaN; // mark unset value as NaN
+	  auto const &top = ready_heap.top();
+	  if (!top.idle && top.has_request()) {
+	    _lowest_prop_tag = top.next_request().tag.proportion +
+	      top.prop_delta;
+	  }
+	  // existing block
+	  double lowest_prop_tag = NaN; // mark unset value as NaN
 	  for (auto const &c : client_map) {
 	    // don't use ourselves (or anything else that might be
 	    // listed as idle) since we're now in the map
@@ -734,10 +735,16 @@ namespace crimson {
 	      }
 	    }
 	  }
-
-	  // if this conditional does not fire, it 
-	  if (lowest_prop_tag < lowest_prop_tag_trigger) {
+	  
+	  // assertion -- check if both are NaN or not
+	  assert( std::isnan(_lowest_prop_tag) == std::isnan(lowest_prop_tag));
+	  
+	  if (!std::isnan(lowest_prop_tag)) {
+	    // assertion -- check if both have same value
+	    assert(_lowest_prop_tag == lowest_prop_tag);
 	    client.prop_delta = lowest_prop_tag - time;
+	    // to be uncommented
+	    // client.prop_delta = _lowest_prop_tag - time;
 	  }
 	  client.idle = false;
 	} // if this client was idle
@@ -1080,9 +1087,9 @@ namespace crimson {
       PullPriorityQueue(typename super::ClientInfoFunc _client_info_f,
 			bool _allow_limit_break = false) :
 	PullPriorityQueue(_client_info_f,
-			  std::chrono::minutes(10),
-			  std::chrono::minutes(15),
-			  std::chrono::minutes(6),
+			  std::chrono::seconds(3), // std::chrono::minutes(10)
+			  std::chrono::seconds(5), // minutes(15)
+			  std::chrono::seconds(2), // minutes(6)
 			  _allow_limit_break)
       {
 	// empty
