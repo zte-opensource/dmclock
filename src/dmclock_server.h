@@ -202,7 +202,6 @@ namespace crimson {
     template<typename C, typename R>
     class PriorityQueueBase {
       FRIEND_TEST(dmclock_server, client_idle_erase);
-      FRIEND_TEST(dmclock_server, client_idle_activation);
 
     public:
 
@@ -1087,9 +1086,9 @@ namespace crimson {
       PullPriorityQueue(typename super::ClientInfoFunc _client_info_f,
 			bool _allow_limit_break = false) :
 	PullPriorityQueue(_client_info_f,
-			  std::chrono::seconds(3), // std::chrono::minutes(10)
-			  std::chrono::seconds(5), // minutes(15)
-			  std::chrono::seconds(2), // minutes(6)
+			  std::chrono::minutes(10)
+			  std::chrono::minutes(15)
+			  std::chrono::minutes(6)
 			  _allow_limit_break)
       {
 	// empty
