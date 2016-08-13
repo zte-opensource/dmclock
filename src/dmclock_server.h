@@ -202,7 +202,8 @@ namespace crimson {
     template<typename C, typename R>
     class PriorityQueueBase {
       FRIEND_TEST(dmclock_server, client_idle_erase);
-
+      FRIEND_TEST(dmclock_server, client_idle_activation);
+      
     public:
 
       using RequestRef = std::unique_ptr<R>;
@@ -221,6 +222,7 @@ namespace crimson {
 
       class ClientReq {
 	friend PriorityQueueBase;
+	FRIEND_TEST(dmclock_server, client_idle_activation);
 
 	RequestTag tag;
 	C          client_id;
@@ -247,6 +249,7 @@ namespace crimson {
 
       class ClientRec {
 	friend PriorityQueueBase<C,R>;
+	FRIEND_TEST(dmclock_server, client_idle_activation);
 
 	C                     client;
 	RequestTag            prev_tag;
@@ -712,38 +715,18 @@ namespace crimson {
 	  // (define USE_PROP_TAG) and do an O(1) operation here.
 
 	  // a proposal
-	  double _lowest_prop_tag = NaN; // mark unset value as NaN
-	  auto const &top = ready_heap.top();
-	  if (!top.idle && top.has_request()) {
-	    _lowest_prop_tag = top.next_request().tag.proportion +
-	      top.prop_delta;
-	  }
-	  // existing block
-	  double lowest_prop_tag = NaN; // mark unset value as NaN
-	  for (auto const &c : client_map) {
-	    // don't use ourselves (or anything else that might be
-	    // listed as idle) since we're now in the map
-	    if (!c.second->idle) {
-	      // use either lowest proportion tag or previous proportion tag
-	      if (c.second->has_request()) {
-		double p = c.second->next_request().tag.proportion +
-		  c.second->prop_delta;
-		if (p < lowest_prop_tag) {
-		  lowest_prop_tag = p;
-		}
-	      }
+	  auto prop_f = [](const ClientRec& top) -> double {
+	    if (!top.idle && top.has_request()) {
+	      return top.next_request().tag.proportion + top.prop_delta;
 	    }
-	  }
-	  
-	  // assertion -- check if both are NaN or not
-	  assert( std::isnan(_lowest_prop_tag) == std::isnan(lowest_prop_tag));
+	    return NaN;
+	  };
+
+	  double lowest_prop_tag = fmin(prop_f(ready_heap.top()),
+					prop_f(limit_heap.top()));
 	  
 	  if (!std::isnan(lowest_prop_tag)) {
-	    // assertion -- check if both have same value
-	    assert(_lowest_prop_tag == lowest_prop_tag);
 	    client.prop_delta = lowest_prop_tag - time;
-	    // to be uncommented
-	    // client.prop_delta = _lowest_prop_tag - time;
 	  }
 	  client.idle = false;
 	} // if this client was idle
@@ -1086,9 +1069,9 @@ namespace crimson {
       PullPriorityQueue(typename super::ClientInfoFunc _client_info_f,
 			bool _allow_limit_break = false) :
 	PullPriorityQueue(_client_info_f,
-			  std::chrono::minutes(10)
-			  std::chrono::minutes(15)
-			  std::chrono::minutes(6)
+			  std::chrono::minutes(10),
+			  std::chrono::minutes(15),
+			  std::chrono::minutes(6),
 			  _allow_limit_break)
       {
 	// empty

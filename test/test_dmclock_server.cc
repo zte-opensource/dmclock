@@ -160,7 +160,239 @@ namespace crimson {
 	    "client map loses its entry after erase age";
 	});
     } // TEST
+    
 
+    TEST(dmclock_server, client_idle_activation) {
+      using ClientId = int;
+      using Queue = dmc::PullPriorityQueue<ClientId,Request>;
+
+
+      Queue* pq;
+
+      // 3 clients
+      ClientId client1 = 17;
+      ClientId client2 = 18;
+      ClientId client3 = 19;
+
+      // SLOs
+      double weight = 1;
+
+      // ClientInfo
+      dmc::ClientInfo ci1(0, 1, 0);
+      dmc::ClientInfo ci2(0, 2, 4);
+      dmc::ClientInfo ci3(0, 4, 4);
+
+      auto client_info_f = [&] (ClientId c) -> dmc::ClientInfo {
+	if (client1 == c) return ci1;
+	else if (client2 == c) return ci2;
+	else if (client3 == c) return ci3;
+	else {
+	  ADD_FAILURE() << "got request from neither of two clients";
+	  return ci1; // must return
+	}
+      };
+
+
+      pq = new Queue(client_info_f, false);
+
+      EXPECT_EQ(pq->client_map.size(), 0) << "client map initially has size 0";
+
+      Request req;
+      dmc::ReqParams req_params(1, 1);
+
+      auto pop_f = [&] (ClientId& cl) {
+	Queue::PullReq pr = pq->pull_request();
+	EXPECT_TRUE(pr.is_retn());
+	EXPECT_EQ(cl, pr.get_retn().client);
+      };
+
+      auto check_ready_f = [&] (ClientId& cl, bool ground_truth) {
+	EXPECT_EQ(ground_truth, pq->client_map.at(cl)->next_request().tag.ready);
+      };
+
+      auto add_f = [&](ClientId& cl, Time t = dmc::get_time()) {
+	pq->add_request_time(req, cl, req_params, t);
+      };
+
+      double _lowest_prop_tag = NaN;
+      auto prop_f = [](const Queue::ClientRec &top) -> double {
+	return top.next_request().tag.proportion + top.prop_delta;
+      };
+
+      Time time = dmc::get_time();
+      add_f(client1);
+      add_f(client1);
+
+      add_f(client2, time);
+      add_f(client2);
+
+      check_ready_f(client1, false);
+      check_ready_f(client2, false);
+
+      // pop client1
+      pop_f(client1);
+
+      // add more client 2
+      add_f(client2);
+      add_f(client2);
+
+      // client 2 is now ready
+      check_ready_f(client1, false);
+      check_ready_f(client2, true);
+
+      // pop client2
+      pop_f(client2);
+      
+      // client 1 is now ready
+      check_ready_f(client1, true);
+      check_ready_f(client2, false);
+
+      // special condition: when limit_heap.top() client has smaller p_tag
+      // than ready_heap.top() client's p_tag 
+      EXPECT_GT(prop_f(pq->ready_heap.top()), prop_f(pq->limit_heap.top()));
+
+      // new client comes
+      add_f(client3);
+
+      // calculate prop_delta in two ways
+      // O(1)
+      double lowest_prop_tag_O_1 = std::min({
+	prop_f(pq->ready_heap.top()),
+	prop_f(pq->limit_heap.top())});
+
+      // O(n)
+      double lowest_prop_tag_O_n = std::min({
+	prop_f(*pq->client_map.at(client1)),
+	prop_f(*pq->client_map.at(client2)),
+	prop_f(*pq->client_map.at(client3))
+      });
+
+      // make sure they are same
+      EXPECT_DOUBLE_EQ(lowest_prop_tag_O_1, lowest_prop_tag_O_n);
+      pop_f(client3);
+
+    } // TEST
+
+    
+#if 0
+    TEST(dmclock_server, client_idle_activation) {
+      using ClientId = int;
+      using Queue = dmc::PullPriorityQueue<ClientId,Request>;
+
+      Queue* pq;
+
+      // 3 clients
+      ClientId client1 = 17;
+      ClientId client2 = 18;
+      ClientId client3 = 19;
+
+      // SLOs
+      double weight = 1;
+
+      // ClientInfo
+      dmc::ClientInfo ci1(0, 1*weight, 1*weight);
+      dmc::ClientInfo ci2(0, 2*weight, 2*weight + 1);
+      dmc::ClientInfo ci3(0, 4*weight, 4*weight);
+
+      auto client_info_f = [&] (ClientId c) -> dmc::ClientInfo {
+	if (client1 == c) return ci1;
+	else if (client2 == c) return ci2;
+	else if (client3 == c) return ci3;
+	else {
+	  ADD_FAILURE() << "got request from neither of two clients";
+	  return ci1; // must return
+	}
+      };
+
+
+      pq = new Queue(client_info_f,
+	       std::chrono::seconds(3), // idle-time
+	       std::chrono::seconds(5), // erase time
+	       std::chrono::seconds(2), // check-time
+	       false);
+
+      auto lock_pq = [&](std::function<void()> code) {
+	test_locked(pq->data_mtx, code);
+      };
+
+
+      /* The timeline should be as follows:
+       *
+       *     0 seconds : request created
+       *
+       *     1 seconds : map is size 1, idle is false
+       *
+       * 2 seconds : clean notes first mark; +2 is base for further calcs
+       *
+       * 4 seconds : clean does nothing except makes another mark
+       *
+       *   5 seconds : when we're scheduled to idle (+2 + 3)
+       *
+       * 6 seconds : clean idles client
+       *
+       *   7 seconds : when we're secheduled to erase (+2 + 5)
+       *
+       *     7 seconds : verified client is idle
+       *
+       * 8 seconds : clean erases client info
+       *
+       *     9 seconds : verified client is erased
+       */
+
+      lock_pq([&] () {
+	  EXPECT_EQ(pq->client_map.size(), 0) << "client map initially has size 0";
+	});
+
+      Request req;
+      dmc::ReqParams req_params(1, 1);
+
+      int num_req = 10;
+      Time time = dmc::get_time();
+      for (int i = 0 ; i < num_req; i++) {
+	pq->add_request_time(req, client1, req_params, time);
+	pq->add_request_time(req, client2, req_params, time);
+	pq->add_request_time(req, client3, req_params, time);
+	//time = dmc::get_time();
+      }
+//
+//      std::this_thread::sleep_for(std::chrono::seconds(1));
+//
+//      lock_pq([&] () {
+//	  EXPECT_EQ(3, pq.client_map.size()) << "client map has 3 after 3 client";
+//	  EXPECT_FALSE(pq.client_map.at(client1)->idle) <<
+//	    "initially client map entry shows not idle.";
+//	});
+//
+//      std::this_thread::sleep_for(std::chrono::seconds(6));
+//
+//      lock_pq([&] () {
+//	  EXPECT_TRUE(pq.client_map.at(client)->idle) <<
+//	    "after idle age client map entry shows idle.";
+//	});
+//
+//      std::this_thread::sleep_for(std::chrono::seconds(2));
+//
+//      lock_pq([&] () {
+//	  EXPECT_EQ(0, pq.client_map.size()) <<
+//	    "client map loses its entry after erase age";
+//	});
+            // count the number of times each client is picked up
+      std::vector<ClientId> times;
+
+      for(int i = 0 ; i < 3*num_req ; ) {
+	Queue::PullReq pr  = pq->pull_request();
+	if (pr.is_retn()) {
+	  times.emplace_back(pr.get_retn().client);
+	  std::cout <<pr.get_retn().client <<"\n";
+	  i++;
+	} else {
+	  std::cout <<pr.getTime() <<"\n";
+	  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+      }
+      //EXPECT_EQ(7, times.size()) << "";
+    } // TEST
+#endif
 
 #if 0
     TEST(dmclock_server, reservation_timing) {
