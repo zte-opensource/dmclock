@@ -386,8 +386,14 @@ namespace crimson {
 	friend std::ostream&
 	operator<<(std::ostream& out,
 		   const typename PriorityQueueBase<C,R>::ClientRec& e) {
-	  out << "{ client:" << e.client << " top req: " <<
-	    (e.has_request() ? e.next_request() : "none") << " }";
+	  out << "{ client:" << e.client << " top req: ";
+	  if(e.has_request()) {
+	    out << e.next_request();
+	  } else {  
+	    out << "none";
+	  }
+	  out << " prop_delta: " << e.prop_delta <<
+	      " idle: "<< e.idle << " }";;
 	  return out;
 	}
       }; // class ClientRec
@@ -542,6 +548,10 @@ namespace crimson {
 	       bool use_prop_delta>
       struct ClientCompare {
 	bool operator()(const ClientRec& n1, const ClientRec& n2) const {
+	  if (n1.idle != n2.idle) {
+	    return n1.idle ? false :true;
+	  }
+
 	  if (n1.has_request()) {
 	    if (n2.has_request()) {
 	      const auto& t1 = n1.next_request().tag;
@@ -705,16 +715,7 @@ namespace crimson {
 	  // drifted from real-time. Either use the lowest existing
 	  // proportion tag -- O(1) -- or the client with the lowest
 	  // previous proportion tag -- O(n) where n = # clients.
-	  //
-	  // So we don't have to maintain a propotional queue that
-	  // keeps the minimum on proportional tag alone (we're
-	  // instead using a ready queue), we'll have to check each
-	  // client.
-	  //
-	  // The alternative would be to maintain a proportional queue
-	  // (define USE_PROP_TAG) and do an O(1) operation here.
 
-	  // a proposal
 	  auto prop_f = [](const ClientRec& top) -> double {
 	    if (!top.idle && top.has_request()) {
 	      return top.next_request().tag.proportion + top.prop_delta;

@@ -166,110 +166,305 @@ namespace crimson {
       using ClientId = int;
       using Queue = dmc::PullPriorityQueue<ClientId,Request>;
 
-
       Queue* pq;
+      std::map<ClientId, dmc::ClientInfo*> client_map;
 
-      // 3 clients
-      ClientId client1 = 17;
-      ClientId client2 = 18;
-      ClientId client3 = 19;
-
-      // SLOs
-      double weight = 1;
+      // client IDs
+      ClientId client1 = 1;
+      ClientId client2 = 2;
+      ClientId client3 = 3;
+      ClientId client4 = 4;
+      ClientId client5 = 5;
+      ClientId client6 = 6;
 
       // ClientInfo
-      dmc::ClientInfo ci1(0, 1, 0);
-      dmc::ClientInfo ci2(0, 2, 4);
-      dmc::ClientInfo ci3(0, 4, 4);
+      client_map[client1] = new dmc::ClientInfo{0, 1, 0};
+      client_map[client2] = new dmc::ClientInfo(0, 2, 4);
+      client_map[client3] = new dmc::ClientInfo(0, 4, 4);
+      client_map[client4] = new dmc::ClientInfo(0, 1, 10);
+      client_map[client5] = new dmc::ClientInfo(1, 1, 0);
+      client_map[client6] = new dmc::ClientInfo(0, 10, 0);
 
+      double weight = 1;
       auto client_info_f = [&] (ClientId c) -> dmc::ClientInfo {
-	if (client1 == c) return ci1;
-	else if (client2 == c) return ci2;
-	else if (client3 == c) return ci3;
-	else {
-	  ADD_FAILURE() << "got request from neither of two clients";
-	  return ci1; // must return
-	}
+	return *client_map[c];
       };
 
-
-      pq = new Queue(client_info_f, false);
-
+      pq = new Queue(client_info_f,
+		     std::chrono::seconds(3),
+		     std::chrono::seconds(5),
+		     std::chrono::seconds(2),
+		     false);
       EXPECT_EQ(pq->client_map.size(), 0) << "client map initially has size 0";
+
 
       Request req;
       dmc::ReqParams req_params(1, 1);
 
-      auto pop_f = [&] (ClientId& cl) {
-	Queue::PullReq pr = pq->pull_request();
-	EXPECT_TRUE(pr.is_retn());
-	EXPECT_EQ(cl, pr.get_retn().client);
+
+      auto prop_f = [](const Queue::ClientRec& top) -> double {
+	if (!top.idle && top.has_request()) {
+	  return top.next_request().tag.proportion + top.prop_delta;
+	}
+	return NaN;
+      };
+
+      auto prop_min_O1_f = [&]()-> double {
+	return fmin(prop_f(pq->ready_heap.top()),
+		    prop_f(pq->limit_heap.top()));
+      };
+
+      auto prop_min_On_f = [&]()-> double {
+	double lowest_prop_tag = NaN; // mark unset value as NaN
+	for (auto const &c : pq->client_map) {
+	  // don't use ourselves (or anything else that might be
+	  // listed as idle) since we're now in the map
+	  if (!c.second->idle) {
+	    // use either lowest proportion tag or previous proportion tag
+	    if (c.second->has_request()) {
+	      double p = c.second->next_request().tag.proportion +
+		c.second->prop_delta;
+	      if (std::isnan(lowest_prop_tag) || p < lowest_prop_tag) {
+		lowest_prop_tag = p;
+	      }
+	    }
+	  }
+	}
+	return lowest_prop_tag;
       };
 
       auto check_ready_f = [&] (ClientId& cl, bool ground_truth) {
 	EXPECT_EQ(ground_truth, pq->client_map.at(cl)->next_request().tag.ready);
       };
 
-      auto add_f = [&](ClientId& cl, Time t = dmc::get_time()) {
-	pq->add_request_time(req, cl, req_params, t);
+      auto check_same_f = [&] (double prop1, double prop2) {
+	EXPECT_TRUE(std::isnan(prop1) == std::isnan(prop2));
+	if (!std::isnan(prop1)) {
+	  EXPECT_DOUBLE_EQ(prop1, prop2);
+	}
       };
 
-      double _lowest_prop_tag = NaN;
-      auto prop_f = [](const Queue::ClientRec &top) -> double {
-	return top.next_request().tag.proportion + top.prop_delta;
+      // before adding any request, compare whether 
+      // the min_p tag computed in O(n) and O(1) ways are matched
+      auto add_f = [&](ClientId& cl, int count = 1, Time t = dmc::get_time(),  bool should_print = false) {
+	++pq->tick;
+	bool is_new = false;
+	Queue::ClientRec* temp_client;
+
+	auto client_it = pq->client_map.find(cl);
+	if (pq->client_map.end() != client_it) {
+	  temp_client = &(*client_it->second); 
+	} else { 
+	// hook: temporarily added new client to heaps to 
+	// compute min p_tag independent of regular dmclock code
+	  is_new = true;
+	  ClientInfo info = client_info_f(cl);
+	  Queue::ClientRecRef client_rec =
+	    std::make_shared<Queue::ClientRec>(cl, info, pq->tick);
+	  pq->resv_heap.push(client_rec);
+	  pq->limit_heap.push(client_rec);
+	  pq->ready_heap.push(client_rec);
+
+	  pq->client_map[cl] = client_rec;
+	  temp_client = &(*client_rec); 
+	}
+	Queue::ClientRec& client = *temp_client;
+
+	if (client.idle){
+	  // checking two min p-tags
+	  check_same_f(prop_min_O1_f(), prop_min_On_f());
+	}
+
+	if (is_new) {
+	  // now undo the changes, so that regular dmclock code 
+	  // flow is restored 
+	  --pq->tick;
+	  pq->remove_by_client(cl);
+	  is_new = false;
+	}
+
+	// add 'count' requests
+	for (int i = 0 ; i < count ; i++) {
+	  pq->add_request_time(req, cl, req_params, t);
+	  if (should_print) {
+	    std::cout << "added :" << cl << std::endl;
+	  }
+	}
+      };
+
+      auto pop_f = [&] (ClientId& cl, bool should_print = false) {
+	Queue::PullReq pr = pq->pull_request();
+	EXPECT_TRUE(pr.is_retn());
+	EXPECT_EQ(cl, pr.get_retn().client);
+
+	if (should_print) {
+	  std::cout << "popped: " << pr.get_retn().client << std::endl;
+	}
+      };
+
+      // debugging purpose
+      auto just_pop_f = [&] (bool should_print = false) {
+	Queue::PullReq pr = pq->pull_request();
+	if(pr.is_retn()){
+	  if (should_print) {
+	    std::cout << "popped: " << pr.get_retn().client << std::endl;
+	  }
+	}
+	else if (pr.is_future()) {
+	  if (should_print) {
+	    std::cout << "future: " << dmc::format_time( pr.getTime()) << std::endl;
+	  }
+	  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+	}
+
+	else if (pr.is_none()) {
+	  if (should_print) {
+	    std::cout << "none " << std::endl;
+	  }
+	  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+	}
+	else {}
+      };
+
+      // debugging purpose
+      auto print_f = [&](ClientId cl){
+	auto client_it = pq->client_map.find(cl);
+	if (pq->client_map.end() != client_it) {
+	  std::cout << *client_it->second << std::endl;
+	}
+      };
+
+      // debugging purpose
+      auto print_all_f = [&]() {
+	std::cout << std::endl << "At time-stamp " <<dmc::format_time(dmc::get_time())<< " : " << std::endl;
+	for (auto &c : client_map) {
+	  print_f(c.first);
+	}
+	std::cout <<"heap tops :" << std::endl;
+	std::cout <<"resv: " ; print_f(pq->resv_heap.top().client);
+	std::cout <<"ready: "; print_f(pq->ready_heap.top().client);
+	std::cout <<"limit: "; print_f(pq->limit_heap.top().client);
       };
 
       Time time = dmc::get_time();
-      add_f(client1);
-      add_f(client1);
 
-      add_f(client2, time);
-      add_f(client2);
+      add_f(client1, 3);
+      add_f(client2, 2);
 
       check_ready_f(client1, false);
       check_ready_f(client2, false);
+
+      /*
+	* We'll add clients one by another.
+	* Whenever a new client comes into the system, we use special add_f(...) 
+	* routine that computes the min_p tag in O(1) and O(n) times, and
+	* compares them whether they are same. 
+	* During the addition of a new client, we'll create different situations such as  
+	* ready_heap's top element has higher p-tag than the limit_heap's top element,
+	* all existing clients are in 'ready' states,
+	* all existing clients are in 'idle' states, etc.
+	* all but one client has only next_request() when an idle client wakes up
+	* It is worthwhile to mention that the ClientCompare functor is slightly
+	* modified to adjust new changes.
+      */
 
       // pop client1
       pop_f(client1);
 
       // add more client 2
-      add_f(client2);
+      add_f(client2, 1, time);
       add_f(client2);
 
-      // client 2 is now ready
+      // client 2 is ready
       check_ready_f(client1, false);
       check_ready_f(client2, true);
 
       // pop client2
       pop_f(client2);
-      
-      // client 1 is now ready
+      //print_all_f();
       check_ready_f(client1, true);
       check_ready_f(client2, false);
 
-      // special condition: when limit_heap.top() client has smaller p_tag
-      // than ready_heap.top() client's p_tag 
       EXPECT_GT(prop_f(pq->ready_heap.top()), prop_f(pq->limit_heap.top()));
 
-      // new client comes
-      add_f(client3);
+      //print_all_f();
 
-      // calculate prop_delta in two ways
-      // O(1)
-      double lowest_prop_tag_O_1 = std::min({
-	prop_f(pq->ready_heap.top()),
-	prop_f(pq->limit_heap.top())});
+      // when new client comes
+      // check min_prop is same computed in two ways
+      check_same_f(prop_min_O1_f(), prop_min_On_f());
+      add_f(client3, 3);
 
-      // O(n)
-      double lowest_prop_tag_O_n = std::min({
-	prop_f(*pq->client_map.at(client1)),
-	prop_f(*pq->client_map.at(client2)),
-	prop_f(*pq->client_map.at(client3))
-      });
-
-      // make sure they are same
-      EXPECT_DOUBLE_EQ(lowest_prop_tag_O_1, lowest_prop_tag_O_n);
       pop_f(client3);
+      //print_all_f();
+
+      // another client comes
+      add_f(client4, 2);
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      //print_all_f();
+
+      pop_f(client4);
+      pop_f(client2);
+      //print_all_f();
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      pop_f(client3);
+      pop_f(client1);
+      //print_all_f();
+
+      //add another client
+      add_f(client5);
+      //print_all_f();
+
+      // pop-off all requests
+      size_t count = pq->request_count();
+      while (count != 0) {
+	auto p = pq->pull_request();
+	if (!p.is_retn()) {
+	  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+	} else {
+	  count--;
+	}
+      }
+      add_f(client1);
+
+      // all clients are now idle
+      std::this_thread::sleep_for(std::chrono::milliseconds(6500));
+      //print_all_f();
+
+      // activate idle clients one by one
+      add_f(client2);
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      //print_all_f();
+
+      // only one client is active and has_request true.
+      // without the recent modification in ClientCompare, add_t(client3) will fail
+      add_f(client3);
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+      add_f(client4);
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+      add_f(client5);
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      //print_all_f();
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+      add_f(client6);
+      //print_all_f();
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+      just_pop_f();
+
+      //print_all_f();
+
+
+
+      // clean-up
+      for (auto &c : client_map) {
+	delete c.second;
+      }
+      delete pq;
 
     } // TEST
 
