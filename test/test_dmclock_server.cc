@@ -245,7 +245,8 @@ namespace crimson {
       };
 
       // before adding any request, compare whether 
-      // the min_p tag computed in O(n) and O(1) ways are matched
+      // the min_p tag computed in O(n) and O(1) ways are matched.
+      // debugging purpose -- set should_print to true
       auto add_f = [&](ClientId& cl, int count = 1, Time t = dmc::get_time(),  bool should_print = false) {
 	++pq->tick;
 	bool is_new = false;
@@ -256,7 +257,13 @@ namespace crimson {
 	  temp_client = &(*client_it->second); 
 	} else { 
 	// hook: temporarily added new client to heaps to 
-	// compute min p_tag independent of regular dmclock code
+	// compute min p_tag independent of regular dmclock code.
+	// We need to do this because dmclock code calls
+	// pq->add_request_time(...) which adjusts the heaps twice:
+	// (i)  when the client is new, and 
+	// (ii) at the end of add_request_time(...) routine.
+	// We do not want (ii) at this point, as it might alter the heaps' tops again. 
+	    
 	  is_new = true;
 	  ClientInfo info = client_info_f(cl);
 	  Queue::ClientRecRef client_rec =
@@ -292,6 +299,7 @@ namespace crimson {
 	}
       };
 
+      // debugging purpose -- set should_print to true
       auto pop_f = [&] (ClientId& cl, bool should_print = false) {
 	Queue::PullReq pr = pq->pull_request();
 	EXPECT_TRUE(pr.is_retn());
@@ -302,7 +310,7 @@ namespace crimson {
 	}
       };
 
-      // debugging purpose
+      // debugging purpose -- set should_print to true 
       auto just_pop_f = [&] (bool should_print = false) {
 	Queue::PullReq pr = pq->pull_request();
 	if(pr.is_retn()){
@@ -355,17 +363,18 @@ namespace crimson {
       check_ready_f(client2, false);
 
       /*
-	* We'll add clients one by another.
+	* We'll add clients one by one.
 	* Whenever a new client comes into the system, we use special add_f(...) 
 	* routine that computes the min_p tag in O(1) and O(n) times, and
 	* compares them whether they are same. 
 	* During the addition of a new client, we'll create different situations such as  
-	* ready_heap's top element has higher p-tag than the limit_heap's top element,
-	* all existing clients are in 'ready' states,
-	* all existing clients are in 'idle' states, etc.
-	* all but one client has only next_request() when an idle client wakes up
+	* - ready_heap's top element has higher p-tag than the limit_heap's top element,
+	* - all existing clients are in 'ready' states,
+	* - all existing clients are in 'idle' states, etc.
+	* - all but one client has only next_request() true when an idle client wakes up.
 	* It is worthwhile to mention that the ClientCompare functor is slightly
-	* modified to adjust new changes.
+	* modified to adjust new changes. Because, there is a situation where an idle 
+	* client sits on top of the heap even if there exists an active client. 
       */
 
       // pop client1

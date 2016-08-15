@@ -393,7 +393,7 @@ namespace crimson {
 	    out << "none";
 	  }
 	  out << " prop_delta: " << e.prop_delta <<
-	      " idle: "<< e.idle << " }";;
+	      " idle: " << e.idle << " }";;
 	  return out;
 	}
       }; // class ClientRec
