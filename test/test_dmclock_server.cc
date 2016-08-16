@@ -279,7 +279,9 @@ namespace crimson {
 
 	if (client.idle){
 	  // checking two min p-tags
+	  std::cout << "BEFORE" << std::endl;
 	  check_same_f(prop_min_O1_f(), prop_min_On_f());
+	  std::cout << "AFTEr" << std::endl;
 	}
 
 	if (is_new) {

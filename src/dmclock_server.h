@@ -548,9 +548,11 @@ namespace crimson {
 	       bool use_prop_delta>
       struct ClientCompare {
 	bool operator()(const ClientRec& n1, const ClientRec& n2) const {
+#if 0 // remove temporarily -- Eric
 	  if (n1.idle != n2.idle) {
 	    return n1.idle ? false :true;
 	  }
+#endif
 
 	  if (n1.has_request()) {
 	    if (n2.has_request()) {
