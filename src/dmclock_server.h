@@ -108,6 +108,7 @@ namespace crimson {
       double proportion;
       double limit;
       bool   ready; // true when within limit
+      double cost_factor;
 #ifndef DO_NOT_DELAY_TAG_CALC
       Time   arrival;
 #endif
@@ -116,23 +117,24 @@ namespace crimson {
 		 const ClientInfo& client,
 		 const ReqParams& req_params,
 		 const Time& time,
-		 const double cost = 0.0) :
-	reservation(cost + tag_calc(time,
-				    prev_tag.reservation,
-				    client.reservation_inv,
-				    req_params.rho,
-				    true)),
-	proportion(tag_calc(time,
-			    prev_tag.proportion,
-			    client.weight_inv,
-			    req_params.delta,
-			    true)),
-	limit(tag_calc(time,
-		       prev_tag.limit,
-		       client.limit_inv,
-		       req_params.delta,
-		       false)),
-	ready(false)
+		 const double _cost_factor = 1.0) :
+	reservation(_cost_factor * tag_calc(time,
+					    prev_tag.reservation,
+					    client.reservation_inv,
+					    req_params.rho,
+					    true)),
+	proportion(_cost_factor * tag_calc(time,
+					   prev_tag.proportion,
+					   client.weight_inv,
+					   req_params.delta,
+					   true)),
+	limit(_cost_factor * tag_calc(time,
+				      prev_tag.limit,
+				      client.limit_inv,
+				      req_params.delta,
+				      false)),
+	ready(false),
+	cost_factor(_cost_factor)
 #ifndef DO_NOT_DELAY_TAG_CALC
 	, arrival(time)
 #endif
@@ -140,11 +142,13 @@ namespace crimson {
 	assert(reservation < max_tag || proportion < max_tag);
       }
 
-      RequestTag(double _res, double _prop, double _lim, const Time& _arrival) :
+      RequestTag(double _res, double _prop, double _lim,
+		 const Time& _arrival, double _cost_factor = 1.0) :
 	reservation(_res),
 	proportion(_prop),
 	limit(_lim),
-	ready(false)
+	ready(false),
+	cost_factor(_cost_factor)
 #ifndef DO_NOT_DELAY_TAG_CALC
 	, arrival(_arrival)
 #endif
@@ -156,7 +160,8 @@ namespace crimson {
 	reservation(other.reservation),
 	proportion(other.proportion),
 	limit(other.limit),
-	ready(other.ready)
+	ready(other.ready),
+	cost_factor(other.cost_factor)
 #ifndef DO_NOT_DELAY_TAG_CALC
 	, arrival(other.arrival)
 #endif
@@ -213,6 +218,8 @@ namespace crimson {
       using MarkPoint = std::pair<TimePoint,Counter>;
 
       enum class ReadyOption {ignore, lowers, raises};
+
+      double size_effect_denom = 0.0;
 
       // forward decl for friend decls
       template<double RequestTag::*, ReadyOption, bool>
@@ -435,6 +442,20 @@ namespace crimson {
 	  total += i->request_count();
 	}
 	return total;
+      }
+
+
+      /* size_effect_denom should be equal the product of the delay
+       * time (seek + disk rotation) and the peak bit rate. A 0 value
+       * for size_effect_denom means operation size compensation won't
+       * be done. */
+      inline void set_size_effect_denom(double val) {
+	size_effect_denom = val;
+      }
+
+
+      inline double get_size_effect_denom() const {
+	return size_effect_denom;
       }
 
 
@@ -669,7 +690,7 @@ namespace crimson {
 			  const C&         client_id,
 			  const ReqParams& req_params,
 			  const Time       time,
-			  const double     cost = 0.0) {
+			  uint32_t         size = 0) {
 	++tick;
 
 	// this pointer will help us create a reference to a shared
@@ -742,18 +763,30 @@ namespace crimson {
 	  client.idle = false;
 	} // if this client was idle
 
+	// calculate cost_factor per the section 3.1 (IO size) of
+	// dmClock paper by Gulati, Merchant, and
+	// Varman. size_effect_denom should be equal the product of
+	// the delay time (seek + disk rotation) and the peak bit
+	// rate. A 0 for either size_effect_denom or size results in
+	// this factor not being used.
+	const double cost_factor =
+	  size > 0 && size_effect_denom > 0.0 ?
+	  (1.0 + size / size_effect_denom) :
+	  1.0;
+
 #ifndef DO_NOT_DELAY_TAG_CALC
-	RequestTag tag(0, 0, 0, time);
+	RequestTag tag(0, 0, 0, time, cost_factor);
 
 	if (!client.has_request()) {
 	  tag = RequestTag(client.get_req_tag(), client.info,
-			   req_params, time, cost);
+			   req_params, time, cost_factor);
 
 	  // copy tag to previous tag for client
 	  client.update_req_tag(tag, tick);
 	}
 #else
-	RequestTag tag(client.get_req_tag(), client.info, req_params, time, cost);
+	RequestTag tag(client.get_req_tag(), client.info, req_params,
+		       time, cost_factor);
 #endif
 
 	client.add_request(tag, client.client, std::move(request));
@@ -794,7 +827,8 @@ namespace crimson {
 	  ClientReq& next_first = top.next_request();
 	  next_first.tag = RequestTag(first.tag, top.info,
 	                              ReqParams(top.cur_delta, top.cur_rho),
-				      next_first.tag.arrival);
+				      next_first.tag.arrival,
+				      next_first.tag.cost_factor);
 
   	  // copy tag to previous tag for client
 	  top.update_req_tag(next_first.tag, tick);
@@ -1092,24 +1126,24 @@ namespace crimson {
       inline void add_request(const R& request,
 			      const C& client_id,
 			      const ReqParams& req_params,
-			      double addl_cost = 0.0) {
+			      uint32_t size = 0) {
 	add_request(typename super::RequestRef(new R(request)),
 		    client_id,
 		    req_params,
 		    get_time(),
-		    addl_cost);
+		    size);
       }
 
 
       inline void add_request(const R& request,
 			      const C& client_id,
-			      double addl_cost = 0.0) {
+			      uint32_t size = 0) {
 	static const ReqParams null_req_params;
 	add_request(typename super::RequestRef(new R(request)),
 		    client_id,
 		    null_req_params,
 		    get_time(),
-		    addl_cost);
+		    size);
       }
 
 
@@ -1118,28 +1152,28 @@ namespace crimson {
 				   const C& client_id,
 				   const ReqParams& req_params,
 				   const Time time,
-				   double addl_cost = 0.0) {
+				   uint32_t size = 0) {
 	add_request(typename super::RequestRef(new R(request)),
 		    client_id,
 		    req_params,
 		    time,
-		    addl_cost);
+		    size);
       }
 
 
       inline void add_request(typename super::RequestRef&& request,
 			      const C& client_id,
 			      const ReqParams& req_params,
-			      double addl_cost = 0.0) {
-	add_request(request, req_params, client_id, get_time(), addl_cost);
+			      uint32_t size = 0) {
+	add_request(request, req_params, client_id, get_time(), size);
       }
 
 
       inline void add_request(typename super::RequestRef&& request,
 			      const C& client_id,
-			      double addl_cost = 0.0) {
+			      uint32_t size = 0) {
 	static const ReqParams null_req_params;
-	add_request(request, null_req_params, client_id, get_time(), addl_cost);
+	add_request(request, null_req_params, client_id, get_time(), size);
       }
 
 
@@ -1148,7 +1182,7 @@ namespace crimson {
 		       const C&                     client_id,
 		       const ReqParams&             req_params,
 		       const Time                   time,
-		       double                       addl_cost = 0.0) {
+		       uint32_t                     size = 0) {
 	typename super::DataGuard g(this->data_mtx);
 #ifdef PROFILE
 	add_request_timer.start();
@@ -1157,7 +1191,7 @@ namespace crimson {
 			      client_id,
 			      req_params,
 			      time,
-			      addl_cost);
+			      size);
 	// no call to schedule_request for pull version
 #ifdef PROFILE
 	add_request_timer.stop();
@@ -1332,33 +1366,33 @@ namespace crimson {
       inline void add_request(const R& request,
 			      const C& client_id,
 			      const ReqParams& req_params,
-			      double addl_cost = 0.0) {
+			      uint32_t size = 0) {
 	add_request(typename super::RequestRef(new R(request)),
 		    client_id,
 		    req_params,
 		    get_time(),
-		    addl_cost);
+		    size);
       }
 
 
       inline void add_request(typename super::RequestRef&& request,
 			      const C& client_id,
 			      const ReqParams& req_params,
-			      double addl_cost = 0.0) {
-	add_request(request, req_params, client_id, get_time(), addl_cost);
+			      uint32_t size = 0) {
+	add_request(request, req_params, client_id, get_time(), size);
       }
 
 
-      inline void add_request_time(const R& request,
-				   const C& client_id,
-				   const ReqParams& req_params,
-				   const Time time,
-				   double addl_cost = 0.0) {
+      inline void add_request_time(const    R& request,
+				   const    C& client_id,
+				   const    ReqParams& req_params,
+				   const    Time time,
+				   uint32_t size = 0) {
 	add_request(typename super::RequestRef(new R(request)),
 		    client_id,
 		    req_params,
 		    time,
-		    addl_cost);
+		    size);
       }
 
 
@@ -1366,7 +1400,7 @@ namespace crimson {
 		       const C&         client_id,
 		       const ReqParams& req_params,
 		       const Time       time,
-		       double           addl_cost = 0.0) {
+		       uint32_t         size = 0) {
 	typename super::DataGuard g(this->data_mtx);
 #ifdef PROFILE
 	add_request_timer.start();
@@ -1375,7 +1409,7 @@ namespace crimson {
 			      client_id,
 			      req_params,
 			      time,
-			      addl_cost);
+			      size);
 	schedule_request();
 #ifdef PROFILE
 	add_request_timer.stop();
