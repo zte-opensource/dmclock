@@ -177,7 +177,8 @@ namespace crimson {
 
 	  it->second.req_update(delta_counter, rho_counter);
 
-	  return ReqParams(uint32_t(delta), uint32_t(rho));
+	  // return ReqParams(uint32_t(delta), uint32_t(rho));
+	  return ReqParams(uint32_t(delta), uint32_t(delta));
 	}
       }
 
