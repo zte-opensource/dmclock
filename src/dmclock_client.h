@@ -27,15 +27,15 @@ namespace crimson {
     struct ServerInfo {
       Counter   delta_prev_req;
       Counter   rho_prev_req;
-      uint32_t  my_delta;
-      uint32_t  my_rho;
+      uint32_t  my_resps_delta;
+      uint32_t  my_resps_rho;
 
       ServerInfo(Counter _delta_prev_req,
 		 Counter _rho_prev_req) :
 	delta_prev_req(_delta_prev_req),
 	rho_prev_req(_rho_prev_req),
-	my_delta(0),
-	my_rho(0)
+	my_resps_delta(0),
+	my_resps_rho(0)
       {
 	// empty
       }
@@ -43,13 +43,13 @@ namespace crimson {
       inline void req_update(Counter delta, Counter rho) {
 	delta_prev_req = delta;
 	rho_prev_req = rho;
-	my_delta = 0;
-	my_rho = 0;
+	my_resps_delta = 0;
+	my_resps_rho = 0;
       }
 
       inline void resp_update(PhaseType phase) {
-	++my_delta;
-	if (phase == PhaseType::reservation) ++my_rho;
+	++my_resps_delta;
+	if (phase == PhaseType::reservation) ++my_resps_rho;
       }
     };
 
@@ -142,10 +142,15 @@ namespace crimson {
 	  server_map.emplace(server, ServerInfo(delta_counter, rho_counter));
 	  return ReqParams(1, 1);
 	} else {
-	  Counter delta =
-	    1 + delta_counter - it->second.delta_prev_req - it->second.my_delta;
-	  Counter rho =
-	    1 + rho_counter - it->second.rho_prev_req - it->second.my_rho;
+	  Counter delta = 1 +
+	    delta_counter -
+	    it->second.delta_prev_req -
+	    it->second.my_resps_delta;
+
+	  Counter rho = 1 +
+	    rho_counter -
+	    it->second.rho_prev_req -
+	    it->second.my_resps_rho;
 
 	  it->second.req_update(delta_counter, rho_counter);
 
