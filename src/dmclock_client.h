@@ -120,12 +120,10 @@ namespace crimson {
 	  // this code can only run if a request did not precede the
 	  // response or if the record was cleaned up b/w when
 	  // the request was made and now
-	  ServerInfo si(delta_counter, rho_counter);
-	  si.resp_update(phase);
-	  server_map.emplace(server_id, si);
-	} else {
-	  it->second.resp_update(phase);
+	  auto p = server_map.emplace(server_id, ServerInfo(delta_counter, rho_counter));
+	  it = p.first; // p is a pair where first element is an iterator (second bool)
 	}
+	it->second.resp_update(phase);
 
 	++delta_counter;
 	if (PhaseType::reservation == phase) {
