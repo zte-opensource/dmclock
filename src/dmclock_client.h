@@ -29,13 +29,17 @@ namespace crimson {
       Counter   rho_prev_req;
       uint32_t  my_resps_delta;
       uint32_t  my_resps_rho;
+      uint32_t  borrowed_delta;
+      uint32_t  borrowed_rho;
 
       ServerInfo(Counter _delta_prev_req,
 		 Counter _rho_prev_req) :
 	delta_prev_req(_delta_prev_req),
 	rho_prev_req(_rho_prev_req),
 	my_resps_delta(0),
-	my_resps_rho(0)
+	my_resps_rho(0),
+	borrowed_delta(0),
+	borrowed_rho(0)
       {
 	// empty
       }
@@ -139,18 +143,37 @@ namespace crimson {
 	DataGuard g(data_mtx);
 	auto it = server_map.find(server);
 	if (server_map.end() == it) {
-	  server_map.emplace(server, ServerInfo(delta_counter, rho_counter));
+	  auto p = server_map.emplace(server,
+				      ServerInfo(delta_counter, rho_counter));
+	  ++(p.first->second.borrowed_delta);
+	  ++(p.first->second.borrowed_rho);
 	  return ReqParams(1, 1);
 	} else {
-	  Counter delta = 1 +
+	  Counter delta =
 	    delta_counter -
 	    it->second.delta_prev_req -
 	    it->second.my_resps_delta;
+	  if (0 == delta) {
+	    delta = 1;
+	    ++it->second.borrowed_delta;
+	  } else if (delta > 1 && it->second.borrowed_delta > 0) {
+	    uint32_t xfer = std::min(uint32_t(delta - 1),
+				     it->second.borrowed_delta);
+	    delta -= xfer;
+	    it->second.borrowed_delta -= xfer;
+	  }
 
-	  Counter rho = 1 +
-	    rho_counter -
-	    it->second.rho_prev_req -
-	    it->second.my_resps_rho;
+	  Counter rho =
+	    rho_counter - it->second.rho_prev_req - it->second.my_resps_rho;
+	  if (0 == rho) {
+	    rho = 1;
+	    ++it->second.borrowed_rho;
+	  } else if (rho > 1 && it->second.borrowed_rho > 0) {
+	    uint32_t xfer = std::min(uint32_t(rho - 1),
+				     it->second.borrowed_rho);
+	    rho -= xfer;
+	    it->second.borrowed_rho -= xfer;
+	  }
 
 	  it->second.req_update(delta_counter, rho_counter);
 
