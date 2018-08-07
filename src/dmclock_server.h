@@ -346,8 +346,12 @@ namespace crimson {
       class ClientRec {
 	friend PriorityQueueBase<C,R,IsDelayed,U1,B>;
 
+	// we don't want to include gtest.h just for FRIEND_TEST
+	friend class dmclock_server_client_idle_erase_Test;
+
 	C                     client;
 	RequestTag            prev_tag;
+
 	std::deque<ClientReq> requests;
 
 	// amount added from the proportion tag as a result of
@@ -361,13 +365,22 @@ namespace crimson {
 	c::IndIntruHeapData   prop_heap_data {};
 #endif
 
-      public:
-
 	const ClientInfo*     info;
 	bool                  idle;
 	Counter               last_tick;
 	uint32_t              cur_rho;
 	uint32_t              cur_delta;
+
+	// by copying the next request's tag here, we remove a level
+	// of indirection when doing heap adjustments
+	bool                  has_next_req;
+	RequestTag            next_req_tag;
+
+	inline bool internal_has_request() const {
+	  return !requests.empty();
+	}
+
+      public:
 
 	ClientRec(C _client,
 		  const ClientInfo* _info,
@@ -378,7 +391,9 @@ namespace crimson {
 	  idle(true),
 	  last_tick(current_tick),
 	  cur_rho(1),
-	  cur_delta(1)
+	  cur_delta(1),
+	  has_next_req(false),
+	  next_req_tag(0.0, 0.0, 0.0, TimeZero)
 	{
 	  // empty
 	}
@@ -403,7 +418,11 @@ namespace crimson {
 	}
 
 	inline void add_request(const RequestTag& tag, RequestRef&& request) {
+	  bool update = requests.empty();
 	  requests.emplace_back(tag, client, std::move(request));
+	  if (update) {
+	    update_next_req_tag();
+	  }
 	}
 
 	inline const ClientReq& next_request() const {
@@ -416,10 +435,20 @@ namespace crimson {
 
 	inline void pop_request() {
 	  requests.pop_front();
+	  update_next_req_tag();
+	}
+
+	inline void update_next_req_tag() {
+	  if (internal_has_request()) {
+	    next_req_tag = next_request().tag;
+	    has_next_req = true;
+	  } else {
+	    has_next_req = false;
+	  }
 	}
 
 	inline bool has_request() const {
-	  return !requests.empty();
+	  return has_next_req;
 	}
 
 	inline size_t request_count() const {
@@ -440,6 +469,9 @@ namespace crimson {
 	      ++i;
 	    }
 	  }
+	  if (any_removed) {
+	    update_next_req_tag();
+	  }
 	  return any_removed;
 	}
 
@@ -456,6 +488,9 @@ namespace crimson {
 	    } else {
 	      ++i;
 	    }
+	  }
+	  if (any_removed) {
+	    update_next_req_tag();
 	  }
 	  return any_removed;
 	}
@@ -479,13 +514,18 @@ namespace crimson {
 	    " req_count:" << e.requests.size() <<
 	    " top_req:";
 	  if (e.has_request()) {
-	    out << e.next_request();
+	    out << e.next_request() << " next_req_tag:" << e.next_req_tag;
 	  } else {
 	    out << "none";
 	  }
 	  out << " }";
 
 	  return out;
+	}
+
+	inline void clear_requests() {
+	  requests.clear();
+	  update_next_req_tag();
 	}
       }; // class ClientRec
 
@@ -605,7 +645,7 @@ namespace crimson {
 	  }
 	}
 
-	i->second->requests.clear();
+	i->second->clear_requests();
 
 	resv_heap.adjust(*i->second);
 	limit_heap.adjust(*i->second);
@@ -645,7 +685,7 @@ namespace crimson {
 
 	out << "{ PriorityQueue::";
 	for (const auto& c : q.client_map) {
-	  out << "  { client:" << c.first << ", record:" << *c.second <<
+	  out << " { client:" << c.first << ", record:" << *c.second <<
 	    " }";
 	}
 	if (!q.resv_heap.empty()) {
@@ -715,10 +755,11 @@ namespace crimson {
 	       bool use_prop_delta>
       struct ClientCompare {
 	bool operator()(const ClientRec& n1, const ClientRec& n2) const {
-	  if (n1.has_request()) {
-	    if (n2.has_request()) {
-	      const auto& t1 = n1.next_request().tag;
-	      const auto& t2 = n2.next_request().tag;
+	  if (n1.has_next_req) {
+	    if (n2.has_next_req) {
+	      // both n1 and n2 have requests
+	      const auto& t1 = n1.next_req_tag;
+	      const auto& t2 = n2.next_req_tag;
 	      if (ReadyOption::ignore == ready_opt || t1.ready == t2.ready) {
 		// if we don't care about ready or the ready values are the same
 		if (use_prop_delta) {
@@ -737,11 +778,9 @@ namespace crimson {
 	      // n1 has request but n2 does not
 	      return true;
 	    }
-	  } else if (n2.has_request()) {
-	    // n2 has request but n1 does not
-	    return false;
 	  } else {
-	    // both have none; keep stable w false
+	    // either n2 has request but n1 does not, or neither has
+	    // one; either way we'll keep things stable with false
 	    return false;
 	  }
 	}
