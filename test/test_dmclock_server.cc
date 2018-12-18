@@ -152,9 +152,9 @@ namespace crimson {
        */
 
       lock_pq([&] () {
-	  EXPECT_EQ(0u, pq.client_map.size()) <<
-	    "client map initially has size 0";
-	});
+		EXPECT_EQ(0u, pq.client_map.size()) <<
+		  "client map initially has size 0";
+	      });
 
       Request req;
       dmc::ReqParams req_params(1, 1);
@@ -163,25 +163,25 @@ namespace crimson {
       std::this_thread::sleep_for(std::chrono::seconds(1));
 
       lock_pq([&] () {
-	  EXPECT_EQ(1u, pq.client_map.size()) <<
-	    "client map has 1 after 1 client";
-	  EXPECT_FALSE(pq.client_map.at(client)->idle) <<
-	    "initially client map entry shows not idle.";
-	});
+		EXPECT_EQ(1u, pq.client_map.size()) <<
+		  "client map has 1 after 1 client";
+		EXPECT_FALSE(pq.client_map.at(client)->idle) <<
+		  "initially client map entry shows not idle.";
+	      });
 
       std::this_thread::sleep_for(std::chrono::seconds(6));
 
       lock_pq([&] () {
-	  EXPECT_TRUE(pq.client_map.at(client)->idle) <<
-	    "after idle age client map entry shows idle.";
-	});
+		EXPECT_TRUE(pq.client_map.at(client)->idle) <<
+		  "after idle age client map entry shows idle.";
+	      });
 
       std::this_thread::sleep_for(std::chrono::seconds(2));
 
       lock_pq([&] () {
-	  EXPECT_EQ(0u, pq.client_map.size()) <<
-	    "client map loses its entry after erase age";
-	});
+		EXPECT_EQ(0u, pq.client_map.size()) <<
+		  "client map loses its entry after erase age";
+	      });
     } // TEST
 
 
