@@ -623,10 +623,14 @@ namespace crimson {
       ReqParams req_params(1,1);
 
       auto now = dmc::get_time();
+      now = 162000;
 
       for (int i = 0; i < 5; ++i) {
 	EXPECT_EQ(0, pq->add_request_time(Request{}, client1, req_params, now));
 	EXPECT_EQ(0, pq->add_request_time(Request{}, client2, req_params, now));
+	std::cerr << "add i:" << i << std::endl;
+	std::cerr << *pq << std::endl;
+	std::cerr << "====" << std::endl;
 	now += 0.0001;
       }
 
@@ -634,6 +638,9 @@ namespace crimson {
       int c2_count = 0;
       for (int i = 0; i < 6; ++i) {
 	Queue::PullReq pr = pq->pull_request(now);
+	std::cerr << "remove i:" << i << std::endl;
+	std::cerr << *pq << std::endl;
+	std::cerr << "====" << std::endl;
 	EXPECT_EQ(Queue::NextReqType::returning, pr.type);
 	auto& retn = boost::get<Queue::PullReq::Retn>(pr.data);
 
