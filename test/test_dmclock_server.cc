@@ -625,15 +625,15 @@ namespace crimson {
       auto now = dmc::get_time();
 
       for (int i = 0; i < 5; ++i) {
-	EXPECT_EQ(0, pq->add_request(Request{}, client1, req_params));
-	EXPECT_EQ(0, pq->add_request(Request{}, client2, req_params));
+	EXPECT_EQ(0, pq->add_request_time(Request{}, client1, req_params, now));
+	EXPECT_EQ(0, pq->add_request_time(Request{}, client2, req_params, now));
 	now += 0.0001;
       }
 
       int c1_count = 0;
       int c2_count = 0;
       for (int i = 0; i < 6; ++i) {
-	Queue::PullReq pr = pq->pull_request();
+	Queue::PullReq pr = pq->pull_request(now);
 	EXPECT_EQ(Queue::NextReqType::returning, pr.type);
 	auto& retn = boost::get<Queue::PullReq::Retn>(pr.data);
 
@@ -642,6 +642,7 @@ namespace crimson {
 	else ADD_FAILURE() << "got request from neither of two clients";
 
 	EXPECT_EQ(PhaseType::priority, retn.phase);
+	now += 0.0001;
       }
 
       EXPECT_EQ(2, c1_count) <<
