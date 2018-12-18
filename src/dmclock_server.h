@@ -886,11 +886,9 @@ namespace crimson {
 			 std::bind(&PriorityQueueBase::do_clean, this)));
       }
 
-
       ~PriorityQueueBase() {
 	finishing = true;
       }
-
 
       inline const ClientInfo* get_cli_info(ClientRec& client) const {
 	if (is_dynamic_cli_info_f) {
@@ -1068,10 +1066,12 @@ namespace crimson {
       // data_mtx should be held when called; top of heap should have
       // a ready request
       template<typename C1, IndIntruHeapData ClientRec::*C2, typename C3>
-      RequestTag pop_process_request(IndIntruHeap<C1, ClientRec, C2, C3, B>& heap,
-			       std::function<void(const C& client,
-						  const Cost cost,
-						  RequestRef& request)> process) {
+      RequestTag pop_process_request(
+	IndIntruHeap<C1, ClientRec, C2, C3, B>& heap,
+	std::function<void(const C& client,
+			   const Cost cost,
+			   RequestRef& request)> process)
+      {
 	// gain access to data
 	ClientRec& top = heap.top();
 
