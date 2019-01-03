@@ -380,6 +380,15 @@ namespace crimson {
 	  return !requests.empty();
 	}
 
+	inline void update_next_request_tag() {
+	  if (internal_has_request()) {
+	    next_req_tag = next_request().tag;
+	    has_next_req = true;
+	  } else {
+	    has_next_req = false;
+	  }
+	}
+
       public:
 
 	ClientRec(C _client,
@@ -421,7 +430,7 @@ namespace crimson {
 	  bool update = requests.empty();
 	  requests.emplace_back(tag, client, std::move(request));
 	  if (update) {
-	    update_next_req_tag();
+	    update_next_request_tag();
 	  }
 	}
 
@@ -435,22 +444,17 @@ namespace crimson {
 
 	inline void pop_request() {
 	  requests.pop_front();
-	  update_next_req_tag();
+	  update_next_request_tag();
 	}
 
-	inline void update_next_req_tag() {
-	  if (internal_has_request()) {
-	    next_req_tag = next_request().tag;
-	    has_next_req = true;
-	  } else {
-	    has_next_req = false;
-	  }
-	}
-
-	inline bool has_request() const {
+	inline bool has_next_request() const {
 	  return has_next_req;
 	}
 
+	inline const RequestTag& get_next_request_tag() const {
+	  return next_req_tag;
+	}
+	
 	inline size_t request_count() const {
 	  return requests.size();
 	}
@@ -470,7 +474,7 @@ namespace crimson {
 	    }
 	  }
 	  if (any_removed) {
-	    update_next_req_tag();
+	    update_next_request_tag();
 	  }
 	  return any_removed;
 	}
@@ -490,7 +494,7 @@ namespace crimson {
 	    }
 	  }
 	  if (any_removed) {
-	    update_next_req_tag();
+	    update_next_request_tag();
 	  }
 	  return any_removed;
 	}
@@ -513,8 +517,8 @@ namespace crimson {
 	    " prev_tag:" << e.prev_tag <<
 	    " req_count:" << e.requests.size() <<
 	    " top_req:";
-	  if (e.has_request()) {
-	    out << e.next_request() << " next_req_tag:" << e.next_req_tag;
+	  if (e.has_next_request()) {
+	    out << e.next_request() << " next_req_tag:" << e.get_next_request_tag();
 	  } else {
 	    out << "none";
 	  }
@@ -525,7 +529,7 @@ namespace crimson {
 
 	inline void clear_requests() {
 	  requests.clear();
-	  update_next_req_tag();
+	  update_next_request_tag();
 	}
       }; // class ClientRec
 
@@ -575,7 +579,7 @@ namespace crimson {
 
       bool empty() const {
 	DataGuard g(data_mtx);
-	return (resv_heap.empty() || ! resv_heap.top().has_request());
+	return (resv_heap.empty() || ! resv_heap.top().has_next_request());
       }
 
 
@@ -755,11 +759,11 @@ namespace crimson {
 	       bool use_prop_delta>
       struct ClientCompare {
 	bool operator()(const ClientRec& n1, const ClientRec& n2) const {
-	  if (n1.has_next_req) {
-	    if (n2.has_next_req) {
+	  if (n1.has_next_request()) {
+	    if (n2.has_next_request()) {
 	      // both n1 and n2 have requests
-	      const auto& t1 = n1.next_req_tag;
-	      const auto& t2 = n2.next_req_tag;
+	      const auto& t1 = n1.get_next_request_tag();
+	      const auto& t2 = n2.get_next_request_tag();
 	      if (ReadyOption::ignore == ready_opt || t1.ready == t2.ready) {
 		// if we don't care about ready or the ready values are the same
 		if (use_prop_delta) {
@@ -903,7 +907,7 @@ namespace crimson {
 	RequestTag tag(0, 0, 0, time, 0, 0, cost);
 
 	// only calculate a tag if the request is going straight to the front
-	if (!client.has_request()) {
+	if (!client.has_next_request()) {
 	  const ClientInfo* client_info = get_cli_info(client);
 	  assert(client_info);
 	  tag = RequestTag(client.get_req_tag(), *client_info,
@@ -987,8 +991,8 @@ namespace crimson {
 	    if (!c.second->idle) {
 	      double p;
 	      // use either lowest proportion tag or previous proportion tag
-	      if (c.second->has_request()) {
-		p = c.second->next_request().tag.proportion +
+	      if (c.second->has_next_request()) {
+		p = c.second->get_next_request_tag().proportion +
 		  c.second->prop_delta;
 	      } else {
 	        p = c.second->get_req_tag().proportion + c.second->prop_delta;
@@ -1043,7 +1047,7 @@ namespace crimson {
       // data_mtx must be held by caller
       void update_next_tag(DelayedTagCalc delayed, ClientRec& top,
 			   const RequestTag& tag) {
-	if (top.has_request()) {
+	if (top.has_next_request()) {
 	  // perform delayed tag calculation on the next request
 	  ClientReq& next_first = top.next_request();
 	  const ClientInfo* client_info = get_cli_info(top);
@@ -1075,9 +1079,9 @@ namespace crimson {
 	// gain access to data
 	ClientRec& top = heap.top();
 
-	Cost request_cost = top.next_request().tag.cost;
+	Cost request_cost = top.get_next_request_tag().cost;
 	RequestRef request = std::move(top.next_request().request);
-	RequestTag tag = top.next_request().tag;
+	const RequestTag& tag = top.get_next_request_tag();
 
 	// pop request and adjust heaps
 	top.pop_request();
@@ -1147,8 +1151,8 @@ namespace crimson {
 	// try constraint (reservation) based scheduling
 
 	auto& reserv = resv_heap.top();
-	if (reserv.has_request() &&
-	    reserv.next_request().tag.reservation <= now) {
+	if (reserv.has_next_request() &&
+	    reserv.get_next_request_tag().reservation <= now) {
 	  return NextReq(HeapId::reservation);
 	}
 
@@ -1158,9 +1162,9 @@ namespace crimson {
 	// all items that are within limit are eligible based on
 	// priority
 	auto limits = &limit_heap.top();
-	while (limits->has_request() &&
-	       !limits->next_request().tag.ready &&
-	       limits->next_request().tag.limit <= now) {
+	while (limits->has_next_request() &&
+	       !limits->get_next_request_tag().ready &&
+	       limits->get_next_request_tag().limit <= now) {
 	  limits->next_request().tag.ready = true;
 	  ready_heap.promote(*limits);
 	  limit_heap.demote(*limits);
@@ -1169,9 +1173,9 @@ namespace crimson {
 	}
 
 	auto& readys = ready_heap.top();
-	if (readys.has_request() &&
-	    readys.next_request().tag.ready &&
-	    readys.next_request().tag.proportion < max_tag) {
+	if (readys.has_next_request() &&
+	    readys.get_next_request_tag().ready &&
+	    readys.get_next_request_tag().proportion < max_tag) {
 	  return NextReq(HeapId::ready);
 	}
 
@@ -1180,11 +1184,11 @@ namespace crimson {
 	// schedule something with the lowest proportion tag or
 	// alternatively lowest reservation tag.
 	if (at_limit == AtLimit::Allow) {
-	  if (readys.has_request() &&
-	      readys.next_request().tag.proportion < max_tag) {
+	  if (readys.has_next_request() &&
+	      readys.get_next_request_tag().proportion < max_tag) {
 	    return NextReq(HeapId::ready);
-	  } else if (reserv.has_request() &&
-		     reserv.next_request().tag.reservation < max_tag) {
+	  } else if (reserv.has_next_request() &&
+		     reserv.get_next_request_tag().reservation < max_tag) {
 	    return NextReq(HeapId::reservation);
 	  }
 	}
@@ -1193,15 +1197,15 @@ namespace crimson {
 	// reservation item or next limited item comes up
 
 	Time next_call = TimeMax;
-	if (resv_heap.top().has_request()) {
+	if (resv_heap.top().has_next_request()) {
 	  next_call =
 	    min_not_0_time(next_call,
-			   resv_heap.top().next_request().tag.reservation);
+			   resv_heap.top().get_next_request_tag().reservation);
 	}
-	if (limit_heap.top().has_request()) {
-	  const auto& next = limit_heap.top().next_request();
-	  assert(!next.tag.ready || max_tag == next.tag.proportion);
-	  next_call = min_not_0_time(next_call, next.tag.limit);
+	if (limit_heap.top().has_next_request()) {
+	  const auto& next_tag = limit_heap.top().get_next_request_tag();
+	  assert(!next_tag.ready || max_tag == next_tag.proportion);
+	  next_call = min_not_0_time(next_call, next_tag.limit);
 	}
 	if (next_call < TimeMax) {
 	  return NextReq(next_call);
