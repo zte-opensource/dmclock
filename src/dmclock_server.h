@@ -214,6 +214,20 @@ namespace crimson {
 	arrival(other.arrival)
       { /* empty */ }
 
+      inline bool operator==(const RequestTag& rhs) const {
+	// try and find differences in the stuff most likely to differ
+	// or the smaller stuff first to take advantage of
+	// short-circuited &&
+	return arrival == rhs.arrival &&
+	  delta == rhs.delta &&
+	  rho == rhs.rho &&
+	  cost == rhs.cost &&
+	  ready == rhs.ready &&
+	  reservation == rhs.reservation &&
+	  proportion == rhs.proportion &&
+	  limit == rhs.limit;
+      }
+
       static std::string format_tag_change(double before, double after) {
 	if (before == after) {
 	  return std::string("same");
@@ -448,10 +462,12 @@ namespace crimson {
 	}
 
 	inline bool has_next_request() const {
+	  assert(has_next_req == (requests.size() > 0));
 	  return has_next_req;
 	}
 
 	inline const RequestTag& get_next_request_tag() const {
+	  assert(next_req_tag == next_request().tag);
 	  return next_req_tag;
 	}
 	
