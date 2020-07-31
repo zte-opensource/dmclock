@@ -72,7 +72,7 @@ namespace crimson {
       };
 
       QueueRef pq(new Queue(client_info_f, AtLimit::Wait));
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       // Disable coredumps
       PrCtl unset_dumpable;
@@ -157,7 +157,7 @@ namespace crimson {
 	});
 
       Request req;
-      dmc::ReqParams req_params(1, 1);
+      dmc::ReqParams req_params(1, 1, 1);
       EXPECT_EQ(0, pq.add_request_time(req, client, req_params, dmc::get_time()));
 
       std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -201,9 +201,9 @@ namespace crimson {
       {
 	DelayedQueue queue(client_info_f);
 
-	queue.add_request_time({}, client1, {0,0}, t);
-	queue.add_request_time({}, client1, {0,0}, t + 1);
-	queue.add_request_time({}, client1, {10,10}, t + 2);
+	queue.add_request_time({}, client1, {0,0,0}, t);
+	queue.add_request_time({}, client1, {0,0,0}, t + 1);
+	queue.add_request_time({}, client1, {10,10,0}, t + 2);
 
 	auto pr1 = queue.pull_request(t);
 	ASSERT_TRUE(pr1.is_retn());
@@ -215,9 +215,9 @@ namespace crimson {
       {
 	ImmediateQueue queue(client_info_f);
 
-	queue.add_request_time({}, client1, {0,0}, t);
-	queue.add_request_time({}, client1, {0,0}, t + 1);
-	queue.add_request_time({}, client1, {10,10}, t + 2);
+	queue.add_request_time({}, client1, {0,0,0}, t);
+	queue.add_request_time({}, client1, {0,0,0}, t + 1);
+	queue.add_request_time({}, client1, {10,10,0}, t + 2);
 
 	auto pr1 = queue.pull_request(t);
 	ASSERT_TRUE(pr1.is_retn());
@@ -314,7 +314,7 @@ namespace crimson {
       EXPECT_EQ(0u, pq.client_count());
       EXPECT_EQ(0u, pq.request_count());
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       EXPECT_EQ(0, pq.add_request(MyReq(1), client1, req_params));
       EXPECT_EQ(0, pq.add_request(MyReq(11), client1, req_params));
@@ -383,7 +383,7 @@ namespace crimson {
       EXPECT_EQ(0u, pq.client_count());
       EXPECT_EQ(0u, pq.request_count());
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       EXPECT_EQ(0, pq.add_request(MyReq(1), client1, req_params));
       EXPECT_EQ(0, pq.add_request(MyReq(2), client1, req_params));
@@ -466,7 +466,7 @@ namespace crimson {
       EXPECT_EQ(0u, pq.client_count());
       EXPECT_EQ(0u, pq.request_count());
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       EXPECT_EQ(0, pq.add_request(MyReq(1), client1, req_params));
       EXPECT_EQ(0, pq.add_request(MyReq(2), client1, req_params));
@@ -549,7 +549,7 @@ namespace crimson {
       EXPECT_EQ(0u, pq.client_count());
       EXPECT_EQ(0u, pq.request_count());
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       EXPECT_EQ(0, pq.add_request(MyReq(1), client1, req_params));
       EXPECT_EQ(0, pq.add_request(MyReq(11), client1, req_params));
@@ -620,7 +620,7 @@ namespace crimson {
 
       pq = QueueRef(new Queue(client_info_f, AtLimit::Wait));
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       auto now = dmc::get_time();
 
@@ -673,7 +673,7 @@ namespace crimson {
 
       QueueRef pq(new Queue(client_info_f, AtLimit::Wait));
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       // make sure all times are well before now
       auto old_time = dmc::get_time() - 100.0;
@@ -730,7 +730,7 @@ namespace crimson {
 
       pq = QueueRef(new Queue(client_info_f, AtLimit::Wait));
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       auto now = dmc::get_time();
 
@@ -827,7 +827,7 @@ namespace crimson {
 
       pq = QueueRef(new Queue(client_info_f, AtLimit::Wait));
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       auto now = dmc::get_time();
 
@@ -916,7 +916,7 @@ namespace crimson {
 
       QueueRef pq(new Queue(client_info_f, AtLimit::Wait));
 
-      ReqParams req_params(0, 0);
+      ReqParams req_params(0, 0, 0);
 
       // make sure all times are well before now
       auto start_time = dmc::get_time() - 100.0;
@@ -972,7 +972,7 @@ namespace crimson {
       QueueRef pq(new Queue(client_info_f, AtLimit::Wait));
 
       // Request req;
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       auto now = dmc::get_time();
 
@@ -998,7 +998,7 @@ namespace crimson {
 
       QueueRef pq(new Queue(client_info_f, AtLimit::Wait));
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       // make sure all times are well before now
       auto now = dmc::get_time();
@@ -1029,7 +1029,7 @@ namespace crimson {
 
       QueueRef pq(new Queue(client_info_f, AtLimit::Allow));
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       // make sure all times are well before now
       auto now = dmc::get_time();
@@ -1060,7 +1060,7 @@ namespace crimson {
 
       QueueRef pq(new Queue(client_info_f, AtLimit::Allow));
 
-      ReqParams req_params(1,1);
+      ReqParams req_params(1,1,1);
 
       // make sure all times are well before now
       auto now = dmc::get_time();

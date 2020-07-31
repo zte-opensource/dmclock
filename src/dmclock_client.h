@@ -39,43 +39,47 @@ namespace crimson {
     class OrigTracker {
       Counter   delta_prev_req;
       Counter   rho_prev_req;
+      Counter   beta_prev_req;  // beta for bandwidth
       uint32_t  my_delta;
       uint32_t  my_rho;
+      Counter   my_beta;
 
     public:
 
       OrigTracker(Counter global_delta,
-		  Counter global_rho) :
+		  Counter global_rho,
+		  Counter global_beta) :
 	delta_prev_req(global_delta),
 	rho_prev_req(global_rho),
+	beta_prev_req(global_beta),
 	my_delta(0),
-	my_rho(0)
+	my_rho(0),
+	my_beta(0)
       { /* empty */ }
 
-      static inline OrigTracker create(Counter the_delta, Counter the_rho) {
-	return OrigTracker(the_delta, the_rho);
+      static inline OrigTracker create(Counter the_delta, Counter the_rho, Counter the_beta) {
+	return OrigTracker(the_delta, the_rho, the_beta);
       }
 
-      inline ReqParams prepare_req(Counter& the_delta, Counter& the_rho) {
+      inline ReqParams prepare_req(Counter& the_delta, Counter& the_rho, Counter& the_beta) {
 	Counter delta_out = the_delta - delta_prev_req - my_delta;
 	Counter rho_out = the_rho - rho_prev_req - my_rho;
+	Counter beta_out = the_beta - beta_prev_req - my_beta;
 	delta_prev_req = the_delta;
 	rho_prev_req = the_rho;
+	beta_prev_req = the_beta;
 	my_delta = 0;
 	my_rho = 0;
-	return ReqParams(uint32_t(delta_out), uint32_t(rho_out));
+	my_beta = 0;
+	return ReqParams(uint32_t(delta_out), uint32_t(rho_out), Counter(beta_out));
       }
 
-      inline void resp_update(PhaseType phase,
-			      Counter& the_delta,
-			      Counter& the_rho,
-			      Cost cost) {
-	the_delta += cost;
+      inline void resp_update(PhaseType phase, Cost cost, Counter byte) {
 	my_delta += cost;
 	if (phase == PhaseType::reservation) {
-	  the_rho += cost;
 	  my_rho += cost;
 	}
+	my_beta += byte;
       }
 
       inline Counter get_last_delta() const {
@@ -90,21 +94,26 @@ namespace crimson {
     class BorrowingTracker {
       Counter delta_prev_req;
       Counter rho_prev_req;
+      Counter beta_prev_req;
       Counter delta_borrow;
       Counter rho_borrow;
+      Counter beta_borrow;
 
     public:
 
-      BorrowingTracker(Counter global_delta, Counter global_rho) :
+      BorrowingTracker(Counter global_delta, Counter global_rho, Counter global_beta) :
 	delta_prev_req(global_delta),
 	rho_prev_req(global_rho),
+	beta_prev_req(global_beta),
 	delta_borrow(0),
-	rho_borrow(0)
+	rho_borrow(0),
+	beta_borrow(0)
       { /* empty */ }
 
       static inline BorrowingTracker create(Counter the_delta,
-					    Counter the_rho) {
-	return BorrowingTracker(the_delta, the_rho);
+					    Counter the_rho,
+					    Counter the_beta) {
+	return BorrowingTracker(the_delta, the_rho, the_beta);
       }
 
       inline Counter calc_with_borrow(const Counter& global,
@@ -128,24 +137,20 @@ namespace crimson {
 	}
       }
 
-      inline ReqParams prepare_req(Counter& the_delta, Counter& the_rho) {
+      inline ReqParams prepare_req(Counter& the_delta, Counter& the_rho, Counter& the_beta) {
 	Counter delta_out =
 	  calc_with_borrow(the_delta, delta_prev_req, delta_borrow);
 	Counter rho_out =
 	  calc_with_borrow(the_rho, rho_prev_req, rho_borrow);
+	Counter beta_out =
+	  calc_with_borrow(the_beta, rho_prev_req, beta_borrow);
 	delta_prev_req = the_delta;
 	rho_prev_req = the_rho;
-	return ReqParams(uint32_t(delta_out), uint32_t(rho_out));
+	beta_prev_req = the_beta;
+	return ReqParams(uint32_t(delta_out), uint32_t(rho_out), Counter(beta_out));
       }
 
-      inline void resp_update(PhaseType phase,
-			      Counter& the_delta,
-			      Counter& the_rho,
-			      Counter cost) {
-	the_delta += cost;
-	if (phase == PhaseType::reservation) {
-	  the_rho += cost;
-	}
+      inline void resp_update(PhaseType phase, Counter cost, Counter byte) {
       }
 
       inline Counter get_last_delta() const {
@@ -171,6 +176,7 @@ namespace crimson {
 
       Counter                 delta_counter; // # reqs completed
       Counter                 rho_counter;   // # reqs completed via reservation
+      Counter                 beta_bytes;    // # req's bytes completed
       std::map<S,T>           server_map;
       mutable std::mutex      data_mtx;      // protects Counters and map
 
@@ -220,7 +226,8 @@ namespace crimson {
        */
       void track_resp(const S& server_id,
 		      const PhaseType& phase,
-		      Counter request_cost = 1u) {
+		      Counter request_cost = 1u,
+		      Counter request_byte = 0) {
 	DataGuard g(data_mtx);
 
 	auto it = server_map.find(server_id);
@@ -229,10 +236,16 @@ namespace crimson {
 	  // response or if the record was cleaned up b/w when
 	  // the request was made and now
 	  auto i = server_map.emplace(server_id,
-				      T::create(delta_counter, rho_counter));
+				      T::create(delta_counter, rho_counter, beta_bytes));
 	  it = i.first;
 	}
-	it->second.resp_update(phase, delta_counter, rho_counter, request_cost);
+	it->second.resp_update(phase, request_cost, request_byte);
+
+        delta_counter += request_cost;
+        if (PhaseType::reservation == phase) {
+          rho_counter += request_cost;
+        }
+        beta_bytes += request_byte;
       }
 
       /*
@@ -243,10 +256,10 @@ namespace crimson {
 	auto it = server_map.find(server);
 	if (server_map.end() == it) {
 	  server_map.emplace(server,
-			     T::create(delta_counter, rho_counter));
-	  return ReqParams(1, 1);
+			     T::create(delta_counter, rho_counter, beta_bytes));
+	  return ReqParams(1, 1, 1);
 	} else {
-	  return it->second.prepare_req(delta_counter, rho_counter);
+	  return it->second.prepare_req(delta_counter, rho_counter, beta_bytes);
 	}
       }
 
