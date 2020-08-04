@@ -97,6 +97,7 @@ namespace crimson {
       double weight;       // proportional
       double limit;        // maximum
       double bandwidth;    // max bytes
+      Counter version;     // qos update
 
       // multiplicative inverses of above, which we use in calculations
       // and don't want to recalculate repeatedly
@@ -106,11 +107,13 @@ namespace crimson {
       double bandwidth_inv;
 
       // order parameters -- min, "normal", max
-      ClientInfo(double _reservation, double _weight, double _limit, double _bandw = 0.0) :
+      ClientInfo(double _reservation, double _weight, double _limit,
+                 double _bandw = 0.0, Counter _version = 0) :
 	reservation(_reservation),
 	weight(_weight),
 	limit(_limit),
 	bandwidth(_bandw),
+	version(_version),
 	reservation_inv(0.0 == reservation ? 0.0 : 1.0 / reservation),
 	weight_inv(     0.0 == weight      ? 0.0 : 1.0 / weight),
 	limit_inv(      0.0 == limit       ? 0.0 : 1.0 / limit),
@@ -120,11 +123,12 @@ namespace crimson {
       }
 
       ClientInfo() :
-        reservation(-1), weight(-1), limit(-1), bandwidth(-1),
+        reservation(-1), weight(-1), limit(-1), bandwidth(-1), version(0),
         reservation_inv(-1), weight_inv(-1), limit_inv(-1), bandwidth_inv(-1) {}
 
       ClientInfo(const ClientInfo &other) :
-        ClientInfo(other.reservation, other.weight, other.limit, other.bandwidth) {
+        ClientInfo(other.reservation, other.weight, other.limit,
+                   other.bandwidth, other.version) {
       }
 
       bool valid() const {
@@ -132,17 +136,38 @@ namespace crimson {
         return !invalid;
       }
 
+      bool unchanged(const ClientInfo &other) const {
+        return reservation  == other.reservation
+               && weight    == other.weight
+               && limit     == other.limit
+               && bandwidth == other.bandwidth
+               && version   == other.version;
+      }
+
+      void assign(const ClientInfo &other) {
+        reservation     = other.reservation;
+        weight          = other.weight;
+        limit           = other.limit;
+        bandwidth       = other.bandwidth;
+        // deliberately exclude *version*
+        reservation_inv = (0.0 == reservation ? 0.0 : 1.0 / reservation);
+        weight_inv      = (0.0 == weight      ? 0.0 : 1.0 / weight);
+        limit_inv       = (0.0 == limit       ? 0.0 : 1.0 / limit);
+        bandwidth_inv   = (0.0 == bandwidth   ? 0.0 : 1.0 / bandwidth);
+      }
+
       friend std::ostream& operator<<(std::ostream& out,
 				      const ClientInfo& client) {
 	out <<
-	  "{ ClientInfo:: r:" << client.reservation <<
+	  "ClientInfo{v:" << client.version <<
+	  " r:" << std::fixed << client.reservation <<
 	  " w:" << std::fixed << client.weight <<
 	  " l:" << std::fixed << client.limit <<
 	  " b:" << std::fixed << client.bandwidth <<
-	  " 1/r:" << std::fixed << client.reservation_inv <<
-	  " 1/w:" << std::fixed << client.weight_inv <<
-	  " 1/l:" << std::fixed << client.limit_inv <<
-	  " 1/b:" << std::fixed << client.bandwidth_inv <<
+	  " 1/r:" << client.reservation_inv <<
+	  " 1/w:" << client.weight_inv <<
+	  " 1/l:" << client.limit_inv <<
+	  " 1/b:" << client.bandwidth_inv <<
 	  " }";
 	return out;
       }
@@ -405,7 +430,7 @@ namespace crimson {
 
       public:
 
-	const ClientInfo*     info;
+	ClientInfo            info;
 	bool                  idle;
 	Counter               last_tick;
 	uint32_t              cur_rho;
@@ -413,7 +438,7 @@ namespace crimson {
 	Counter               cur_beta;
 
 	ClientRec(C _client,
-		  const ClientInfo* _info,
+		  ClientInfo _info,
 		  Counter current_tick) :
 	  client(_client),
 	  prev_tag(0.0, 0.0, 0.0, 0.0, TimeZero),
@@ -673,7 +698,7 @@ namespace crimson {
 	auto client_it = client_map.find(client_id);
 	if (client_map.end() != client_it) {
 	  ClientRec& client = (*client_it->second);
-	  client.info = client_info_f(client_id);
+	  client.info = *client_info_f(client_id);
 	}
       }
 
@@ -681,7 +706,7 @@ namespace crimson {
       void update_client_infos() {
 	DataGuard g(data_mtx);
 	for (auto i : client_map) {
-	  i.second->info = client_info_f(i.second->client);
+	  i.second->info = *client_info_f(i.second->client);
 	}
       }
 
@@ -918,11 +943,11 @@ namespace crimson {
       }
 
 
-      inline const ClientInfo* get_cli_info(ClientRec& client) const {
+      inline ClientInfo* get_cli_info(ClientRec& client) const {
 	if (is_dynamic_cli_info_f) {
-	  client.info = client_info_f(client.client);
+	  client.info = *client_info_f(client.client);
 	}
-	return client.info;
+	return &client.info;
       }
 
       // data_mtx must be held by caller
@@ -932,7 +957,7 @@ namespace crimson {
 
 	// only calculate a tag if the request is going straight to the front
 	if (!client.has_request()) {
-	  const ClientInfo* client_info = get_cli_info(client);
+	  ClientInfo* client_info = get_cli_info(client);
 	  assert(client_info);
 	  tag = RequestTag(client.get_req_tag(), *client_info,
 			   params, time, cost, anticipation_timeout);
@@ -947,7 +972,7 @@ namespace crimson {
       RequestTag initial_tag(ImmediateTagCalc imm, ClientRec& client,
 			     const ReqParams& params, Time time, Cost cost) {
 	// calculate the tag unconditionally
-	const ClientInfo* client_info = get_cli_info(client);
+	ClientInfo* client_info = get_cli_info(client);
 	assert(client_info);
 	RequestTag tag(client.get_req_tag(), *client_info,
 		       params, time, cost, anticipation_timeout);
@@ -969,12 +994,13 @@ namespace crimson {
 			 const ClientInfo& client_info = ClientInfo()) {
 	++tick;
 
+        ClientInfo info = client_info.valid() ?
+                          client_info : *client_info_f(client_id);
+        assert(info.valid());
         auto insert = client_map.emplace(client_id, ClientRecRef{});
         if (insert.second) {
           // new client entry
-	  ClientInfo info = client_info.valid() ?
-	                    client_info : *client_info_f(client_id);
-	  auto client_rec = std::make_shared<ClientRec>(client_id, &info, tick);
+	  auto client_rec = std::make_shared<ClientRec>(client_id, info, tick);
 	  resv_heap.push(client_rec);
 #if USE_PROP_HEAP
 	  prop_heap.push(client_rec);
@@ -987,8 +1013,18 @@ namespace crimson {
 
 	// for convenience, we'll create a reference to the shared pointer
 	ClientRec& client = *insert.first->second;
-	client.info = client_info.valid() ?
-	              &client_info : client_info_f(client_id); // for update qos from client
+	if (!client.info.unchanged(info)) {
+	  client.info = info;   // update qos from client
+
+          // avoid reqs io drop to zero caused by qos update online
+          RequestTag tag(0, 0, 0, 0, time);
+          client.update_req_tag(tag, tick);
+          for (auto& r : client.requests) {
+            r.tag = RequestTag(client.get_req_tag(),
+                               client.info, 1, 1, 1, time);
+            client.update_req_tag(r.tag, tick);
+          }
+        }
 
 	if (client.idle) {
 	  // We need to do an adjustment so that idle clients compete
@@ -1082,7 +1118,7 @@ namespace crimson {
 	if (top.has_request()) {
 	  // perform delayed tag calculation on the next request
 	  ClientReq& next_first = top.next_request();
-	  const ClientInfo* client_info = get_cli_info(top);
+	  ClientInfo* client_info = get_cli_info(top);
 	  assert(client_info);
 	  next_first.tag = RequestTag(tag, *client_info,
 				      top.cur_delta, top.cur_rho, top.cur_beta,
@@ -1140,7 +1176,7 @@ namespace crimson {
 	  // only maintain a tag for the first request
 	  auto& r = client.requests.front();
 	  r.tag.reservation -=
-	    client.info->reservation_inv * std::max(uint32_t(1), tag.rho);
+	    client.info.reservation_inv * std::max(uint32_t(1), tag.rho);
 	}
       }
 
@@ -1148,7 +1184,7 @@ namespace crimson {
       void reduce_reservation_tags(ImmediateTagCalc imm, ClientRec& client,
                                    const RequestTag& tag) {
         double res_offset =
-          client.info->reservation_inv * std::max(uint32_t(1), tag.rho);
+          client.info.reservation_inv * std::max(uint32_t(1), tag.rho);
 	for (auto& r : client.requests) {
 	  r.tag.reservation -= res_offset;
 	}
@@ -1166,7 +1202,7 @@ namespace crimson {
 
 	// don't forget to update previous tag
 	client.prev_tag.reservation -=
-	  client.info->reservation_inv * std::max(uint32_t(1), tag.rho);
+	  client.info.reservation_inv * std::max(uint32_t(1), tag.rho);
 	resv_heap.promote(client);
       }
 
