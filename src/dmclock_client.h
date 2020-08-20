@@ -17,6 +17,7 @@
 
 #include <map>
 #include <deque>
+#include <list>
 #include <chrono>
 #include <thread>
 #include <mutex>
@@ -29,6 +30,9 @@
 
 namespace crimson {
   namespace dmclock {
+
+    constexpr Counter calc_interval = 2;
+    constexpr Counter history_len = 30;
 
     // OrigTracker is a best-effort implementation of the the original
     // dmClock calculations of delta and rho. It adheres to an
@@ -177,6 +181,11 @@ namespace crimson {
       Counter                 delta_counter; // # reqs completed
       Counter                 rho_counter;   // # reqs completed via reservation
       Counter                 beta_bytes;    // # req's bytes completed
+      Counter                 delta_counter_prev;
+      Counter                 rho_counter_prev;
+      Counter                 beta_bytes_prev;
+      std::list<double>       history_rates[3];  // delta, rho, beta
+
       std::map<S,T>           server_map;
       mutable std::mutex      data_mtx;      // protects Counters and map
 
@@ -190,6 +199,7 @@ namespace crimson {
       // NB: All threads declared at end, so they're destructed firs!
 
       std::unique_ptr<RunEvery> cleaning_job;
+      std::unique_ptr<RunEvery> svc_tick_job;
 
 
     public:
@@ -201,12 +211,22 @@ namespace crimson {
 		     std::chrono::duration<Rep,Per> _clean_age) :
 	delta_counter(1),
 	rho_counter(1),
+	beta_bytes(1),
+	delta_counter_prev(0),
+	rho_counter_prev(0),
+	beta_bytes_prev(0),
 	clean_age(std::chrono::duration_cast<Duration>(_clean_age))
       {
 	cleaning_job =
 	  std::unique_ptr<RunEvery>(
 	    new RunEvery(_clean_every,
 			 std::bind(&ServiceTracker::do_clean, this)));
+        svc_tick_job =
+          std::unique_ptr<RunEvery>(
+            new RunEvery(std::chrono::seconds(calc_interval),
+                         std::bind(&ServiceTracker::calc_svc_rate, this))
+          );
+
       }
 
 
@@ -263,6 +283,32 @@ namespace crimson {
 	}
       }
 
+      void get_average_rates(double *delta, double *rho, double *beta) {
+        double avg_rate = 0;
+        if (delta != nullptr) {
+          for (auto i : history_rates[0]) {
+            avg_rate += i;
+          }
+          *delta = avg_rate / history_rates[0].size();
+        }
+
+        avg_rate = 0;
+        if (rho != nullptr) {
+          for (auto i : history_rates[1]) {
+            avg_rate += i;
+          }
+          *rho = avg_rate / history_rates[1].size();
+        }
+
+        avg_rate = 0;
+        if (beta != nullptr) {
+          for (auto i : history_rates[2]) {
+            avg_rate += i;
+          }
+          *beta = avg_rate / history_rates[2].size();
+        }
+      }
+
     private:
 
       /*
@@ -297,6 +343,29 @@ namespace crimson {
 	  }
 	}
       } // do_clean
+
+      void calc_svc_rate() {
+        DataGuard g(data_mtx);
+        assert(calc_interval > 0);
+
+        auto delta_rate = (delta_counter - delta_counter_prev) / (double)calc_interval;
+        history_rates[0].push_back(delta_rate);
+        delta_counter_prev = delta_counter;
+
+        auto rho_rate = (rho_counter - rho_counter_prev) / (double)calc_interval;
+        history_rates[1].push_back(rho_rate);
+        rho_counter_prev = rho_counter;
+
+        auto beta_rate = (beta_bytes - beta_bytes_prev) / (double)calc_interval;
+        history_rates[2].push_back(beta_rate);
+        beta_bytes_prev = beta_bytes;
+
+        for (auto i = 0; i < 3; i++) {
+          while(history_rates[i].size() > history_len) {
+            history_rates[i].pop_front();
+          }
+        }
+      }
     }; // class ServiceTracker
   }
 }
